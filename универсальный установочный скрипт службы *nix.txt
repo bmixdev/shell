@@ -1,0 +1,116 @@
+универсальный установочный скрипт, который:
+
+✔ копирует весь каталог проекта (а не один файл)
+✔ создаёт systemd-службу
+✔ выставляет права
+✔ запускает и включает службу
+
+Просто положи скрипт рядом с каталогом проекта, например:
+
+project/
+    myapp.py
+    utils/
+    config/
+install_service.sh
+
+✅ install_service.sh — версия с копированием каталога
+#!/bin/bash
+
+# ======================================
+# Конфигурация
+# ======================================
+SERVICE_NAME="myapp"
+SOURCE_DIR="project"          # каталог с проектом (лежит рядом со скриптом)
+INSTALL_DIR="/opt/myapp"      # куда копировать
+SERVICE_USER="myuser"         # под кем будет работать служба
+ENTRY_POINT="myapp.py"        # главный файл Python программы
+# ======================================
+
+echo "=== Установка Python службы: $SERVICE_NAME ==="
+
+# Проверка root
+if [[ $EUID -ne 0 ]]; then
+   echo "Этот скрипт нужно запускать через sudo или под root"
+   exit 1
+fi
+
+# Проверка что каталог существует
+if [[ ! -d "$SOURCE_DIR" ]]; then
+    echo "Ошибка: каталог '$SOURCE_DIR' не найден рядом со скриптом"
+    exit 1
+fi
+
+# Проверка entrypoint
+if [[ ! -f "$SOURCE_DIR/$ENTRY_POINT" ]]; then
+    echo "Ошибка: файл $ENTRY_POINT не найден в каталоге $SOURCE_DIR"
+    exit 1
+fi
+
+# Создаем каталог назначения
+echo "[*] Создаю каталог $INSTALL_DIR"
+mkdir -p "$INSTALL_DIR"
+
+# Копируем весь проект
+echo "[*] Копирую весь каталог проекта:"
+echo "    $SOURCE_DIR → $INSTALL_DIR"
+rsync -av --delete "$SOURCE_DIR/" "$INSTALL_DIR/"
+
+# Права
+echo "[*] Устанавливаю права"
+chown -R $SERVICE_USER:$SERVICE_USER "$INSTALL_DIR"
+chmod -R 755 "$INSTALL_DIR"
+chmod +x "$INSTALL_DIR/$ENTRY_POINT"
+
+# Создаём systemd unit
+SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
+echo "[*] Создаю systemd службу: $SERVICE_PATH"
+
+cat > "$SERVICE_PATH" <<EOF
+[Unit]
+Description=Python Service $SERVICE_NAME
+After=network.target
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+Group=$SERVICE_USER
+WorkingDirectory=$INSTALL_DIR
+ExecStart=/usr/bin/python3 $INSTALL_DIR/$ENTRY_POINT
+
+Restart=always
+RestartSec=5
+
+StandardOutput=append:/var/log/${SERVICE_NAME}.log
+StandardError=append:/var/log/${SERVICE_NAME}_err.log
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Перезагружаем systemd
+echo "[*] systemctl daemon-reload"
+systemctl daemon-reload
+
+# Стартуем
+echo "[*] Запуск службы"
+systemctl start "$SERVICE_NAME"
+
+# Автозапуск
+echo "[*] Включаю автозапуск"
+systemctl enable "$SERVICE_NAME"
+
+echo "=== УСТАНОВКА ЗАВЕРШЕНА ==="
+systemctl status "$SERVICE_NAME" --no-pager
+
+📌 Как использовать
+1. Структура файлов:
+install_service.sh
+project/
+    myapp.py
+    ...
+
+2. Дать права:
+chmod +x install_service.sh
+
+3. Установить:
+sudo ./install_service.sh
